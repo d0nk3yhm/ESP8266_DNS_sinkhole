@@ -25,4 +25,4 @@ Made for: ESP8266 Development Board With 2.44 Cm OLED Display, CH340 Driver, ESP
 5. Set the ESP IP as static ip
 6. Set the DNS on your device to the static ip you set.
 7. Go to http://theIPyouSet/ to see whats going on. You can click on "View Logs" or "update blacklist".
-8. The blacklist will automatically update itself using the provided URL every 24 hours, but can also be imidiatly updated using "update blacklist" button @ http://theIPyouSet/
+8. The blacklist will automatically update itself using the provided URL every 24 hours, but can also be immediately updated using "update blacklist" button @ http://theIPyouSet/
