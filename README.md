@@ -20,7 +20,7 @@ A DNS sinkhole to block ads on your network, utilizing an ESP8266 microcontrolle
 #### Basic Sinkhole Setup
 
 1. Clone this repository to your local machine.
-2. Open the project in Arduino IDE.
+2. Open the project file in Arduino IDE as a *.ino file, or paste the code into Arduino IDE directly.
 3. Edit `SSID` and `password` in the code to match your WiFi network credentials.
 4. Add websites to the `blacklist[]` array as needed.
 5. Upload the code to your ESP8266 using Arduino IDE.
