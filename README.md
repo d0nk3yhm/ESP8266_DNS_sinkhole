@@ -4,8 +4,8 @@ A DNS sinkhole to block ads on your network, utilizing an ESP8266 microcontrolle
 
 ## Features 🌟
 
-- **Basic Version:** Blocks websites based on a static blacklist.
-- **Advanced Version (OLED + Dynamic Blacklist):** Comes with an OLED display for real-time status updates and supports dynamically updating the blacklist from a remote source.
+- **Basic Version:** Blocks websites based on a static blacklist. (file: sinkhole )
+- **Advanced Version (OLED + Dynamic Blacklist):** Comes with an OLED display for real-time status updates and supports dynamically updating the blacklist from a remote source. (file: sinkhole_OLED_dynamicBlacklist )
 
 ## Getting Started 🚀
 
