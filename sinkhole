@@ -1,0 +1,396 @@
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <ESP8266WebServer.h>
+#include <Arduino.h>
+
+const char *ssid = "XXXXXX"; // input your SSID name here
+const char *password = "XXXXXX"; // input your password
+
+WiFiUDP udp;
+ESP8266WebServer server(80);
+
+const IPAddress FORWARD_DNS(8, 8, 8, 8); // Cloudflare DNS server
+const uint16_t FORWARD_DNS_PORT = 53;
+
+const size_t MaxDNSPacketSize = 512; // Standard maximum DNS packet size for UDP
+byte dnsQueryBuffer[MaxDNSPacketSize];
+size_t dnsQueryLength = 0;
+
+String dnsLog = "";
+
+struct SimpleHashSet
+{
+    uint16_t offsets[256];
+    uint8_t count = 0;
+
+    void insert(uint16_t offset)
+    {
+        if (count < sizeof(offsets) / sizeof(offsets[0]))
+        {
+            for (uint8_t i = 0; i < count; ++i)
+            {
+                if (offsets[i] == offset)
+                    return;
+            }
+            offsets[count++] = offset;
+        }
+    }
+
+    bool contains(uint16_t offset)
+    {
+        for (uint8_t i = 0; i < count; ++i)
+        {
+            if (offsets[i] == offset)
+                return true;
+        }
+        return false;
+    }
+};
+
+String readName(const byte *buffer, unsigned int &pos, const byte *start, unsigned int length, bool &isValid);
+String getDomainName(const byte *buffer, unsigned int length);
+String processDomainName(String domainName);
+
+struct DNSHeader
+{
+    uint16_t ID;
+    uint8_t flags[2];
+    uint16_t QDCount;
+    uint16_t ANCount;
+    uint16_t NSCount;
+    uint16_t ARCount;
+};
+
+struct DNSResourceRecord
+{
+    uint16_t name;
+    uint16_t type;
+    uint16_t recordClass; // Renamed from "class"
+    uint32_t ttl;
+    uint16_t dataLength;
+    // You may need to add more members depending on your requirements
+};
+
+String blacklist[] = {
+    "someads.com",
+    "otherads.net",
+    "moreads.com",
+    "so-much-ads.com"};
+
+const size_t blacklistSize = sizeof(blacklist) / sizeof(blacklist[0]);
+
+void appendToLog(const String &entry)
+{
+    static const size_t maxLogEntries = 30;
+    dnsLog += entry + "\n";
+    size_t logEntries = std::count(dnsLog.begin(), dnsLog.end(), '\n');
+    while (logEntries > maxLogEntries)
+    {
+        dnsLog = dnsLog.substring(dnsLog.indexOf('\n') + 1);
+        logEntries--;
+    }
+}
+
+void setup()
+{
+    Serial.begin(115200);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+        delay(500);
+    Serial.println("\nConnected to WiFi");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+
+    udp.begin(FORWARD_DNS_PORT);
+    server.on("/", HTTP_GET, []()
+              { server.send(200, "text/plain", "Welcome to the DNS Sinkhole"); });
+    server.on("/logs", HTTP_GET, []()
+              {
+        String htmlResponse = "<html><head><meta http-equiv=\"refresh\" content=\"5\"></head><body><pre>";
+        htmlResponse += dnsLog;
+        htmlResponse += "</pre></body></html>";
+        server.send(200, "text/html", htmlResponse); });
+    server.begin();
+    Serial.println("HTTP server started.");
+}
+
+void loop()
+{
+    server.handleClient();
+    processDNSQuery(udp);
+}
+
+String readDomainNameFromBuffer(const byte *buffer, size_t length, size_t &pos, bool &isValid)
+{
+    String name = "";
+    isValid = true; // Assume valid until proven otherwise
+    while (pos < length)
+    {
+        uint8_t labelLength = buffer[pos++];
+
+        if (labelLength == 0)
+        { // End of the domain name
+            break;
+        }
+
+        // Check for compression (top two bits set)
+        if ((labelLength & 0xC0) == 0xC0)
+        {
+            isValid = false; // For simplicity, mark as invalid for now
+            return "";       // This example does not handle message compression
+        }
+        else
+        {
+            if (pos + labelLength > length)
+            {
+                isValid = false;
+                return ""; // Avoid buffer overrun
+            }
+            for (uint8_t i = 0; i < labelLength; ++i)
+            {
+                name += (char)buffer[pos++];
+            }
+            name += '.'; // Separator for the next label
+        }
+    }
+
+    if (!name.isEmpty() && name[name.length() - 1] == '.')
+    {
+        name.remove(name.length() - 1); // Remove the trailing dot
+    }
+    return name;
+}
+
+void processDNSQuery(WiFiUDP udp)
+{
+    int packetSize = udp.parsePacket();
+
+    if (packetSize > 0)
+    {
+        // Read the entire packet into dnsQueryBuffer
+        dnsQueryLength = udp.read(dnsQueryBuffer, packetSize);
+
+        // Prepare for parsing the domain name from the buffer
+        bool isValid = false;
+        size_t pos = sizeof(DNSHeader); // Start position after the DNS header
+        String domainName = readDomainNameFromBuffer(dnsQueryBuffer, dnsQueryLength, pos, isValid);
+
+        if (!isValid)
+        {
+            Serial.println("Domain name parsing encountered an error.");
+            appendToLog("Domain name parsing encountered an error.");
+            return;
+        }
+
+        appendToLog("Received query for domain: " + domainName + " at " + String(millis()) + " ms # packetSize: " + String(packetSize) + " bytes");
+
+        // Check if the domain is blacklisted and forward non-blacklisted domains
+        checkIfBlacklisted(domainName, dnsQueryBuffer, dnsQueryLength, udp);
+    }
+}
+
+void checkIfBlacklisted(const String &domainName, const byte *dnsQuery, size_t queryLength, WiFiUDP udp)
+{
+    // Interpret the DNS header directly from the dnsQuery buffer to extract the DNS ID
+    const DNSHeader *dnsHeader = reinterpret_cast<const DNSHeader *>(dnsQuery);
+    uint16_t DNSID = ntohs(dnsHeader->ID);
+
+    if (isDomainBlacklisted(domainName))
+    {
+        IPAddress resolvedIP(0, 0, 0, 0); // Redirect blacklisted domains to 0.0.0.0 ( DNS sinkhole )
+        sendDNSReply(udp.remoteIP(), udp.remotePort(), DNSID, resolvedIP);
+        appendToLog("Blocked domain: " + domainName);
+    }
+    else
+    {
+        // Forward the query to a real DNS server using Google DNS and relay the response
+        appendToLog("Allowed domain: " + domainName);
+        // Forward the DNS query to the external DNS server and relay the response to the requester
+        IPAddress requesterIP = udp.remoteIP();
+        uint16_t requesterPort = udp.remotePort();
+        forwardDNSQuery(dnsQueryBuffer, dnsQueryLength, requesterIP, requesterPort);
+    }
+}
+
+void forwardDNSQuery(const byte *originalQuery, size_t queryLength, IPAddress requesterIP, uint16_t requesterPort)
+{
+    WiFiUDP dnsClient;                 // Create a new instance for communication with the external DNS server
+    dnsClient.begin(FORWARD_DNS_PORT); // Optionally specify a local port for the outgoing packets
+
+    // Forward the DNS query to the external DNS server
+    dnsClient.beginPacket(FORWARD_DNS, FORWARD_DNS_PORT);
+    dnsClient.write(originalQuery, queryLength);
+    dnsClient.endPacket();
+
+    // Wait for a response from the external DNS server
+    unsigned long startTime = millis();
+    while (millis() - startTime < 1000)
+    { // Wait for up to 1000 ms for a response
+        int packetSize = dnsClient.parsePacket();
+        if (packetSize > 0)
+        {
+            byte responseBuffer[1500]; 
+            int bytesRead = dnsClient.read(responseBuffer, sizeof(responseBuffer));
+            // Send the DNS response back to the original requester
+            udp.beginPacket(requesterIP, requesterPort);
+            udp.write(responseBuffer, bytesRead);
+            udp.endPacket();
+            appendToLog("DNS response forwarded back to the requester.");
+            break; // Exit the loop after handling the response
+        }
+    }
+
+    dnsClient.stop(); // Stop the DNS client to free resources
+}
+
+String getDomainName(const byte *buffer, unsigned int length)
+{
+    unsigned int pos = 12;
+    bool isValid = false;
+    String domainName = readName(buffer, pos, buffer, length, isValid);
+    if (!isValid)
+    {
+        Serial.println("Domain name parsing encountered an error.");
+        return "";
+    }
+    return processDomainName(domainName);
+}
+
+String readName(const byte *buffer, unsigned int &pos, const byte *start, unsigned int length, bool &isValid)
+{
+    String name = "";
+    bool isFirstLabel = true;
+    SimpleHashSet visited;
+
+    appendToLog("Starting domain name resolution.");
+
+    while (pos < length)
+    {
+        // Check for buffer overrun before reading length byte
+        if (pos >= length)
+        {
+            appendToLog("Error: Buffer overrun before reading length.");
+            isValid = false;
+            return "";
+        }
+
+        uint8_t len = buffer[pos];
+
+        // Check if this is a compression pointer
+        if ((len & 0xC0) == 0xC0)
+        {
+            // Ensure there are enough bytes for the pointer
+            if (pos + 1 >= length)
+            {
+                appendToLog("Error: Buffer overrun at compression pointer.");
+                isValid = false;
+                return "";
+            }
+            pos++;
+            uint16_t offset = ((len & 0x3F) << 8) | buffer[pos++];
+            if (visited.contains(offset) || offset >= length)
+            {
+                appendToLog("Error: Invalid or looping compression pointer.");
+                isValid = false;
+                return "";
+            }
+            visited.insert(offset);
+            unsigned int savedPos = pos;
+            pos = offset;
+            name += readName(buffer, pos, start, length, isValid);
+            pos = savedPos;
+            break;
+        }
+        else if (len == 0)
+        {
+            isValid = true;
+            break;
+        }
+        else
+        {
+            pos++;
+            if (pos + len > length)
+            {
+                appendToLog("Error: Label extends beyond buffer length.");
+                isValid = false;
+                return "";
+            }
+            if (!isFirstLabel)
+                name += '.';
+            isFirstLabel = false;
+            for (uint8_t i = 0; i < len; ++i)
+            {
+                char c = (char)buffer[pos++];
+                name += c;
+            }
+            // appendToLog(String("Appended part of the domain name: ") + name);
+        }
+    }
+
+    if (!isValid)
+    {
+        appendToLog("Error encountered in domain name resolution.");
+    }
+    else
+    {
+        appendToLog(String("Resolved domain name: ") + name);
+    }
+    return name;
+}
+
+String processDomainName(String domainName)
+{
+    domainName.toLowerCase();
+    if (domainName.startsWith("www."))
+    {
+        domainName.remove(0, 4);
+    }
+    return domainName;
+}
+
+bool isDomainBlacklisted(const String &domainName)
+{
+    for (size_t i = 0; i < blacklistSize; i++)
+    {
+        if (domainName.equalsIgnoreCase(blacklist[i]))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void sendDNSReply(IPAddress clientIP, uint16_t clientPort, uint16_t DNSID, IPAddress resolvedIP)
+{
+    byte responseBuffer[1500];
+    memset(responseBuffer, 0, sizeof(responseBuffer));
+    DNSHeader *dnsHeader = reinterpret_cast<DNSHeader *>(responseBuffer);
+    dnsHeader->ID = htons(DNSID);
+    dnsHeader->flags[0] = 0x84;
+    dnsHeader->flags[1] = 0x00;
+    dnsHeader->QDCount = htons(1);
+    dnsHeader->ANCount = htons(1);
+    dnsHeader->NSCount = htons(0);
+    dnsHeader->ARCount = htons(0);
+    byte *answerPtr = responseBuffer + sizeof(DNSHeader) + 12 + 2;
+    answerPtr[0] = 0xC0;
+    answerPtr[1] = 0x0C;
+    answerPtr[2] = 0x00;
+    answerPtr[3] = 0x01;
+    answerPtr[4] = 0x00;
+    answerPtr[5] = 0x01;
+    answerPtr[6] = 0x00;
+    answerPtr[7] = 0x00;
+    answerPtr[8] = 0x00;
+    answerPtr[9] = 0x3C;
+    answerPtr[10] = 0x00;
+    answerPtr[11] = 0x04;
+    answerPtr[12] = resolvedIP[0];
+    answerPtr[13] = resolvedIP[1];
+    answerPtr[14] = resolvedIP[2];
+    answerPtr[15] = resolvedIP[3];
+    udp.beginPacket(clientIP, clientPort);
+    udp.write(responseBuffer, sizeof(DNSHeader) + 16 + 12 + 2);
+    udp.endPacket();
+}
