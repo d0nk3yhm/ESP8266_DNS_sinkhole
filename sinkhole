@@ -9,7 +9,7 @@ const char *password = "XXXXXX"; // input your password
 WiFiUDP udp;
 ESP8266WebServer server(80);
 
-const IPAddress FORWARD_DNS(8, 8, 8, 8); // Cloudflare DNS server
+const IPAddress FORWARD_DNS(8, 8, 8, 8); // Google DNS server. Change if you want.
 const uint16_t FORWARD_DNS_PORT = 53;
 
 const size_t MaxDNSPacketSize = 512; // Standard maximum DNS packet size for UDP
