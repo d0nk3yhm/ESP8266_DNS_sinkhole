@@ -16,6 +16,7 @@ sinkhole:
 sinkhole_OLED_dynamicBlacklist
 
 Made for: ESP8266 Development Board With 2.44 Cm OLED Display, CH340 Driver, ESP-12E WiFi Wireless Module, And Micro USB Works Great For Arduino IDE/Micropython Programming (Pin Header Soldered)
+Link: [here](https://www.temu.com/esp8266-development-board-with-0-96-inch-oled-display-ch340-driver-esp-12e-wifi-wireless-module-and-micro-usb-works-great-for-arduino-ide-micropython-programming-pin-header-soldered-g-601099516598039.html)
 
 0. Edit SSID and password in the code. Add websites to the blacklist[] as you see fit.
 1. Change the dynamic blacklist URL if you want to, for a custom list you can update from your computer. Current: hostformat=hosts&showintro=1&startday=31&startmonth=08&startyear=2023&mimetype=plaintext&useip=none
