@@ -2,7 +2,7 @@
 A DNS sinkhole to block ads on your network. Using a ESP8266 microcontroller.
 
 
-sinkhole:
+### sinkhole:
 
 0. Edit SSID and password in the code. Add websites to the blacklist[] as you see fit.
 1. Push the code to your ESP8266 using Arduino IDE.
@@ -13,7 +13,7 @@ sinkhole:
 
 
 
-sinkhole_OLED_dynamicBlacklist
+### sinkhole_OLED_dynamicBlacklist
 
 Made for: ESP8266 Development Board With 2.44 Cm OLED Display, CH340 Driver, ESP-12E WiFi Wireless Module, And Micro USB Works Great For Arduino IDE/Micropython Programming (Pin Header Soldered)
 Link: [here](https://www.temu.com/esp8266-development-board-with-0-96-inch-oled-display-ch340-driver-esp-12e-wifi-wireless-module-and-micro-usb-works-great-for-arduino-ide-micropython-programming-pin-header-soldered-g-601099516598039.html)
